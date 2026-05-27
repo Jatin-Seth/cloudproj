@@ -6,7 +6,7 @@ from datetime import datetime
 from io import StringIO
 from urllib.parse import urlparse
 
-from flask import Flask, flash, make_response, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, make_response, redirect, render_template, request, url_for
 
 app = Flask(__name__)
 
@@ -25,6 +25,7 @@ DEFAULT_CATEGORIES = [
     "Entertainment",
     "Other",
 ]
+SITE_NAME = "Expense Tracker"
 
 
 @app.template_filter("currency")
@@ -127,33 +128,65 @@ def normalize_expense(expense):
     }
 
 
-def load_expenses():
-    """Load expenses from the JSON file."""
+def normalize_budget(value):
+    """Keep the saved monthly budget valid and non-negative."""
+    try:
+        budget = round(float(value), 2)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(budget, 0.0)
+
+
+def load_storage():
+    """Load app data from the JSON file, supporting old and new formats."""
     if not os.path.exists(DATA_FILE):
-        return []
+        return {"expenses": [], "monthly_budget": 0.0}
 
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as file:
             raw_data = json.load(file)
     except (json.JSONDecodeError, OSError):
-        return []
+        return {"expenses": [], "monthly_budget": 0.0}
 
-    if not isinstance(raw_data, list):
-        return []
+    if isinstance(raw_data, list):
+        raw_expenses = raw_data
+        monthly_budget = 0.0
+    elif isinstance(raw_data, dict):
+        raw_expenses = raw_data.get("expenses", [])
+        monthly_budget = normalize_budget(raw_data.get("monthly_budget", 0))
+    else:
+        return {"expenses": [], "monthly_budget": 0.0}
 
     expenses = []
-    for raw_expense in raw_data:
+    for raw_expense in raw_expenses:
         normalized = normalize_expense(raw_expense)
         if normalized:
             expenses.append(normalized)
 
-    return expenses
+    return {"expenses": expenses, "monthly_budget": monthly_budget}
+
+
+def save_storage(storage):
+    """Save app data to the JSON file."""
+    payload = {
+        "expenses": storage.get("expenses", []),
+        "monthly_budget": normalize_budget(storage.get("monthly_budget", 0)),
+    }
+
+    with open(DATA_FILE, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+
+
+def load_expenses():
+    """Load only the expenses list."""
+    return load_storage()["expenses"]
 
 
 def save_expenses(expenses):
-    """Save expenses to the JSON file."""
-    with open(DATA_FILE, "w", encoding="utf-8") as file:
-        json.dump(expenses, file, indent=2)
+    """Save only expenses while preserving other stored settings."""
+    storage = load_storage()
+    storage["expenses"] = expenses
+    save_storage(storage)
 
 
 def get_total(expenses):
@@ -190,7 +223,7 @@ def get_category_breakdown(expenses):
     return breakdown
 
 
-def filter_expenses(expenses, selected_category, search_text):
+def filter_expenses(expenses, selected_category, search_text, date_from="", date_to=""):
     """Filter expenses by category and free-text search."""
     filtered = expenses
 
@@ -209,6 +242,12 @@ def filter_expenses(expenses, selected_category, search_text):
             or needle in f"{expense['amount']:.2f}"
         ]
 
+    if date_from and is_valid_date(date_from):
+        filtered = [expense for expense in filtered if expense["expense_date"] >= date_from]
+
+    if date_to and is_valid_date(date_to):
+        filtered = [expense for expense in filtered if expense["expense_date"] <= date_to]
+
     return filtered
 
 
@@ -226,7 +265,23 @@ def sort_expenses(expenses, sort_by):
     return sorted(expenses, key=lambda expense: (expense_date_key(expense), expense["id"]), reverse=True)
 
 
-def get_dashboard_stats(all_expenses, visible_expenses):
+def normalize_date_range(date_from, date_to):
+    """Swap date filters if the user enters them in reverse order."""
+    if is_valid_date(date_from) and is_valid_date(date_to) and date_from > date_to:
+        return date_to, date_from
+    return date_from, date_to
+
+
+def get_current_month_total(expenses):
+    """Total expenses for the current calendar month."""
+    current_month = datetime.now().strftime("%Y-%m")
+    return round(
+        sum(expense["amount"] for expense in expenses if expense["expense_date"].startswith(current_month)),
+        2,
+    )
+
+
+def get_dashboard_stats(all_expenses, visible_expenses, monthly_budget):
     """Build simple stats for the dashboard cards."""
     visible_total = get_total(visible_expenses)
     overall_total = get_total(all_expenses)
@@ -234,11 +289,10 @@ def get_dashboard_stats(all_expenses, visible_expenses):
     overall_count = len(all_expenses)
     average_expense = round(visible_total / visible_count, 2) if visible_count else 0
 
-    current_month = datetime.now().strftime("%Y-%m")
-    monthly_total = round(
-        sum(expense["amount"] for expense in visible_expenses if expense["expense_date"].startswith(current_month)),
-        2,
-    )
+    monthly_total = get_current_month_total(all_expenses)
+    budget_remaining = round(monthly_budget - monthly_total, 2)
+    budget_progress = round((monthly_total / monthly_budget) * 100, 1) if monthly_budget > 0 else 0
+    budget_progress = min(budget_progress, 100) if monthly_budget > 0 else 0
 
     category_totals = get_category_totals(visible_expenses)
     top_category_name = next(iter(category_totals), "No Category Yet")
@@ -252,13 +306,17 @@ def get_dashboard_stats(all_expenses, visible_expenses):
         "overall_count": overall_count,
         "average_expense": average_expense,
         "monthly_total": monthly_total,
+        "monthly_budget": monthly_budget,
+        "budget_remaining": budget_remaining,
+        "budget_progress": budget_progress,
+        "is_over_budget": monthly_budget > 0 and monthly_total > monthly_budget,
         "top_category_name": top_category_name,
         "top_category_amount": top_category_amount,
         "largest_expense": largest_expense,
     }
 
 
-def get_active_filters(selected_category, search_query, sort_by):
+def get_active_filters(selected_category, search_query, sort_by, date_from="", date_to=""):
     """Create simple active-filter labels for the UI."""
     filters = []
 
@@ -274,6 +332,10 @@ def get_active_filters(selected_category, search_query, sort_by):
             "category": "Category name",
         }
         filters.append(f"Sort: {sort_labels.get(sort_by, 'Newest first')}")
+    if date_from:
+        filters.append(f"From: {date_from}")
+    if date_to:
+        filters.append(f"To: {date_to}")
 
     return filters
 
@@ -293,6 +355,14 @@ def get_recent_categories(expenses, limit=6):
             recent_categories.append(category)
 
     return recent_categories
+
+
+def find_expense_by_id(expenses, expense_id):
+    """Return one expense by ID if it exists."""
+    for expense in expenses:
+        if expense["id"] == expense_id:
+            return expense
+    return None
 
 
 def sanitize_next_url(next_url):
@@ -328,23 +398,37 @@ def get_redirect_target(default_endpoint="index"):
 
 @app.route("/", methods=["GET"])
 def index():
-    all_expenses = sort_expenses(load_expenses(), "newest")
+    storage = load_storage()
+    all_expenses = sort_expenses(storage["expenses"], "newest")
+    monthly_budget = storage["monthly_budget"]
     raw_category = request.args.get("category", "all").strip()
     selected_category = "all" if raw_category.lower() in ("", "all") else normalize_category_name(raw_category)
     search_query = normalize_whitespace(request.args.get("search", ""))
     sort_by = request.args.get("sort", "newest")
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    date_from, date_to = normalize_date_range(date_from, date_to)
+    edit_id_text = request.args.get("edit", "").strip()
 
-    filtered_expenses = filter_expenses(all_expenses, selected_category, search_query)
+    filtered_expenses = filter_expenses(all_expenses, selected_category, search_query, date_from, date_to)
     visible_expenses = sort_expenses(filtered_expenses, sort_by)
     category_totals = get_category_totals(visible_expenses)
     category_breakdown = get_category_breakdown(visible_expenses)
-    stats = get_dashboard_stats(all_expenses, visible_expenses)
+    stats = get_dashboard_stats(all_expenses, visible_expenses, monthly_budget)
     categories = sorted({expense["category"] for expense in all_expenses})
     suggested_categories = sorted(set(DEFAULT_CATEGORIES + categories))
     quick_categories = get_recent_categories(all_expenses)
+    recent_expenses = all_expenses[:4]
     current_url = request.full_path[:-1] if request.full_path.endswith("?") else request.full_path
-    has_filters = selected_category != "all" or bool(search_query) or sort_by != "newest"
-    active_filters = get_active_filters(selected_category, search_query, sort_by)
+    has_filters = selected_category != "all" or bool(search_query) or sort_by != "newest" or bool(date_from) or bool(date_to)
+    active_filters = get_active_filters(selected_category, search_query, sort_by, date_from, date_to)
+    edit_expense = None
+
+    if edit_id_text:
+        try:
+            edit_expense = find_expense_by_id(all_expenses, int(edit_id_text))
+        except ValueError:
+            edit_expense = None
 
     return render_template(
         "index.html",
@@ -354,14 +438,19 @@ def index():
         categories=categories,
         suggested_categories=suggested_categories,
         quick_categories=quick_categories,
+        recent_expenses=recent_expenses,
         selected_category=selected_category,
         search_query=search_query,
         sort_by=sort_by,
+        date_from=date_from,
+        date_to=date_to,
         stats=stats,
         has_filters=has_filters,
         active_filters=active_filters,
+        edit_expense=edit_expense,
         today=today_string(),
         current_url=current_url or url_for("index"),
+        site_name=SITE_NAME,
     )
 
 
@@ -409,6 +498,74 @@ def add_expense():
     return redirect(url_for("index"))
 
 
+@app.route("/update/<int:expense_id>", methods=["POST"])
+def update_expense(expense_id):
+    """Update an existing expense."""
+    amount_text = request.form.get("amount", "").strip()
+    category = normalize_category_name(request.form.get("category", ""))
+    note = normalize_whitespace(request.form.get("note", ""))
+    expense_date = request.form.get("expense_date", "").strip() or today_string()
+
+    if not amount_text or not category or not expense_date:
+        flash("Please fill in amount, category, and date.", "error")
+        return redirect(get_redirect_target())
+
+    try:
+        amount = float(amount_text)
+    except ValueError:
+        flash("Amount must be a valid number.", "error")
+        return redirect(get_redirect_target())
+
+    if amount <= 0:
+        flash("Amount must be greater than zero.", "error")
+        return redirect(get_redirect_target())
+
+    if not is_valid_date(expense_date):
+        flash("Please select a valid expense date.", "error")
+        return redirect(get_redirect_target())
+
+    expenses = load_expenses()
+    expense = find_expense_by_id(expenses, expense_id)
+
+    if not expense:
+        flash("Expense not found.", "error")
+        return redirect(url_for("index"))
+
+    expense["amount"] = round(amount, 2)
+    expense["category"] = category
+    expense["note"] = note
+    expense["expense_date"] = expense_date
+    save_expenses(sort_expenses(expenses, "newest"))
+    flash("Expense updated successfully.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/budget", methods=["POST"])
+def set_budget():
+    """Save the monthly budget amount."""
+    budget_text = request.form.get("monthly_budget", "").strip()
+
+    if not budget_text:
+        flash("Please enter a monthly budget amount.", "error")
+        return redirect(get_redirect_target())
+
+    try:
+        monthly_budget = float(budget_text)
+    except ValueError:
+        flash("Monthly budget must be a valid number.", "error")
+        return redirect(get_redirect_target())
+
+    if monthly_budget < 0:
+        flash("Monthly budget cannot be negative.", "error")
+        return redirect(get_redirect_target())
+
+    storage = load_storage()
+    storage["monthly_budget"] = round(monthly_budget, 2)
+    save_storage(storage)
+    flash("Monthly budget updated.", "success")
+    return redirect(url_for("index"))
+
+
 @app.route("/delete/<int:expense_id>", methods=["POST"])
 def delete_expense(expense_id):
     """Delete one expense by its ID."""
@@ -445,8 +602,11 @@ def export_csv():
     selected_category = request.args.get("category", "all")
     search_query = normalize_whitespace(request.args.get("search", ""))
     sort_by = request.args.get("sort", "newest")
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    date_from, date_to = normalize_date_range(date_from, date_to)
 
-    filtered_expenses = filter_expenses(all_expenses, selected_category, search_query)
+    filtered_expenses = filter_expenses(all_expenses, selected_category, search_query, date_from, date_to)
     visible_expenses = sort_expenses(filtered_expenses, sort_by)
 
     csv_buffer = StringIO()
@@ -468,6 +628,20 @@ def export_csv():
     response.headers["Content-Type"] = "text/csv"
     response.headers["Content-Disposition"] = "attachment; filename=expenses.csv"
     return response
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Simple health endpoint for deployment checks."""
+    storage = load_storage()
+    return jsonify(
+        {
+            "status": "ok",
+            "service": SITE_NAME,
+            "expense_count": len(storage["expenses"]),
+            "monthly_budget": storage["monthly_budget"],
+        }
+    )
 
 
 if __name__ == "__main__":

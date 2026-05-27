@@ -8,11 +8,15 @@ A simple and beginner-friendly Expense Tracker built with Python Flask.
 - Add an optional note and expense date
 - View all expenses
 - See total expenses
+- Edit existing expenses
 - Delete expenses
+- Set a monthly budget and track progress
 - Filter by category or search text
+- Filter by date range
 - Sort by newest, oldest, highest, lowest, or category
 - Export visible expenses to CSV
 - Clear all expenses
+- Use `/health` for a simple deployment health check
 - View a simple pie chart using Chart.js
 - Store data in a local JSON file
 

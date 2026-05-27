@@ -1,50 +1,21 @@
-[
-  {
-    "id": 1779884583658394,
-    "amount": 12233.0,
-    "category": "Food",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 17:53:03"
-  },
-  {
-    "id": 1779885389047744,
-    "amount": 3636.0,
-    "category": "Travel",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 23:36:29"
-  },
-  {
-    "id": 1779885465203635,
-    "amount": 5467.0,
-    "category": "Bills",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 23:37:45"
-  },
-  {
-    "id": 1779885486473988,
-    "amount": 344663.0,
-    "category": "Health",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 23:38:06"
-  },
-  {
-    "id": 1779885564064595,
-    "amount": 34324.0,
-    "category": "food",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 23:39:24"
-  },
-  {
-    "id": 1779885618883326,
-    "amount": 34555.0,
-    "category": "Entertainment",
-    "note": "",
-    "expense_date": "2026-05-27",
-    "created_at": "2026-05-27 23:40:18"
-  }
-]
+{
+  "expenses": [
+    {
+      "id": 1779909120648119300,
+      "amount": 5434.0,
+      "category": "Entertainment",
+      "note": "",
+      "expense_date": "2026-05-28",
+      "created_at": "2026-05-28 00:42:00"
+    },
+    {
+      "id": 1779909106208430800,
+      "amount": 100.0,
+      "category": "Travel",
+      "note": "",
+      "expense_date": "2026-05-28",
+      "created_at": "2026-05-28 00:41:46"
+    }
+  ],
+  "monthly_budget": 500000.0
+}
