@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    {% set largest = stats.largest_expense %}
+    <div class="page-shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">Flask + Jinja + Chart.js</p>
+                <h1>Keep your spending clear, fast, and easy to manage.</h1>
+                <p class="hero-text">Track daily expenses with categories, notes, filters, CSV export, and a dashboard that stays simple enough for beginners but polished enough to enjoy using.</p>
+                <div class="hero-tags">
+                    <span>Single-file backend</span>
+                    <span>JSON storage</span>
+                    <span>No database</span>
+                </div>
+            </div>
+
+            <div class="hero-side">
+                <div class="total-card">
+                    <span class="total-label">Visible Total</span>
+                    <strong>{{ stats.visible_total | currency }}</strong>
+                    <p class="total-note">
+                        {% if has_filters %}
+                            This total reflects your current filtered view.
+                        {% else %}
+                            This total includes every saved expense.
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div class="hero-actions">
+                    <a class="btn-secondary" href="{{ url_for('export_csv', category=selected_category, search=search_query, sort=sort_by) }}">Export CSV</a>
+                    <form action="{{ url_for('clear_expenses') }}" method="POST" onsubmit="return confirm('Clear all saved expenses?');">
+                        <button type="submit" class="btn-ghost">Clear All</button>
+                    </form>
+                </div>
+            </div>
+        </header>
+
+        <section class="stats-strip">
+            <article class="stat-card">
+                <span class="stat-label">Entries</span>
+                <strong>{{ stats.visible_count }}</strong>
+                <p>
+                    {% if has_filters %}
+                        Showing {{ stats.visible_count }} of {{ stats.overall_count }} saved expenses.
+                    {% else %}
+                        All recorded expenses in one place.
+                    {% endif %}
+                </p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">This Month</span>
+                <strong>{{ stats.monthly_total | currency }}</strong>
+                <p>Based on the dates in your current view.</p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">Top Category</span>
+                <strong>{{ stats.top_category_name }}</strong>
+                <p>{{ stats.top_category_amount | currency }} in the visible list.</p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">Average</span>
+                <strong>{{ stats.average_expense | currency }}</strong>
+                <p>Average amount per visible expense.</p>
+            </article>
+        </section>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <section class="flash-stack">
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </section>
+            {% endif %}
+        {% endwith %}
+
+        <main class="dashboard-grid">
+            <aside class="left-column">
+                <section class="panel form-panel">
+                    <div class="section-header">
+                        <div>
+                            <h2>Add Expense</h2>
+                            <p>Save an amount, choose a category, and optionally add a short note.</p>
+                        </div>
+                    </div>
+
+                    <form action="{{ url_for('add_expense') }}" method="POST" class="expense-form">
+                        <input type="hidden" name="next_url" value="{{ current_url }}">
+
+                        <div class="field">
+                            <label for="amount">Amount</label>
+                            <input type="number" id="amount" name="amount" step="0.01" min="0.01" placeholder="Enter amount" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="category">Category</label>
+                            <input type="text" id="category" name="category" list="category-list" placeholder="Example: Food, Travel, Bills" required>
+                            <datalist id="category-list">
+                                {% for category in suggested_categories %}
+                                    <option value="{{ category }}"></option>
+                                {% endfor %}
+                            </datalist>
+                        </div>
+
+                        <div class="quick-categories">
+                            {% for category in quick_categories %}
+                                <button type="button" class="quick-chip" data-category="{{ category }}">{{ category }}</button>
+                            {% endfor %}
+                        </div>
+
+                        <div class="field-row">
+                            <div class="field">
+                                <label for="expense_date">Date</label>
+                                <input type="date" id="expense_date" name="expense_date" value="{{ today }}" required>
+                            </div>
+
+                            <div class="field">
+                                <label for="note">Note</label>
+                                <input type="text" id="note" name="note" maxlength="80" placeholder="Optional note">
+                            </div>
+                        </div>
+
+                        <p class="form-note">After saving, your new expense returns to the full list so it is easy to spot right away.</p>
+
+                        <button type="submit" class="btn-primary">Save Expense</button>
+                    </form>
+                </section>
+
+                <section class="panel filter-panel">
+                    <div class="section-header">
+                        <div>
+                            <h2>Filter Expenses</h2>
+                            <p>Search by category, note, date, or amount and change the sort order.</p>
+                        </div>
+                    </div>
+
+                    <form action="{{ url_for('index') }}" method="GET" class="filter-form">
+                        <div class="field">
+                            <label for="category_filter">Category</label>
+                            <select id="category_filter" name="category">
+                                <option value="all" {% if selected_category == "all" %}selected{% endif %}>All categories</option>
+                                {% for category in categories %}
+                                    <option value="{{ category }}" {% if selected_category == category %}selected{% endif %}>{{ category }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="field">
+                            <label for="search">Search</label>
+                            <input type="text" id="search" name="search" value="{{ search_query }}" placeholder="Try Food, Lunch, 2026-05-27, 250.00">
+                        </div>
+
+                        <div class="field">
+                            <label for="sort">Sort By</label>
+                            <select id="sort" name="sort">
+                                <option value="newest" {% if sort_by == "newest" %}selected{% endif %}>Newest first</option>
+                                <option value="oldest" {% if sort_by == "oldest" %}selected{% endif %}>Oldest first</option>
+                                <option value="highest" {% if sort_by == "highest" %}selected{% endif %}>Highest amount</option>
+                                <option value="lowest" {% if sort_by == "lowest" %}selected{% endif %}>Lowest amount</option>
+                                <option value="category" {% if sort_by == "category" %}selected{% endif %}>Category name</option>
+                            </select>
+                        </div>
+
+                        <div class="filter-actions">
+                            <button type="submit" class="btn-primary">Apply Filters</button>
+                            <a href="{{ url_for('index') }}" class="btn-link">Reset</a>
+                        </div>
+                    </form>
+
+                    {% if active_filters %}
+                        <div class="active-filter-list">
+                            {% for label in active_filters %}
+                                <span class="filter-pill">{{ label }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </section>
+            </aside>
+
+            <section class="right-column">
+                <section class="panel insights-panel">
+                    <div class="section-header">
+                        <div>
+                            <h2>Spending Insights</h2>
+                            <p>A quick visual summary of the categories in your current list.</p>
+                        </div>
+                        {% if largest %}
+                            <div class="highlight-card">
+                                <span>Largest Expense</span>
+                                <strong>{{ largest.amount | currency }}</strong>
+                                <p>{{ largest.category }} on {{ largest.expense_date }}</p>
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="insights-grid">
+                        <div class="chart-panel">
+                            <div class="chart-wrap">
+                                <canvas id="expenseChart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="breakdown-panel">
+                            <h3>Category Breakdown</h3>
+                            {% if category_breakdown %}
+                                <div class="category-breakdown">
+                                    {% for item in category_breakdown[:6] %}
+                                        <div class="breakdown-item">
+                                            <div class="breakdown-row">
+                                                <span>{{ item.category }}</span>
+                                                <strong>{{ item.amount | currency }}</strong>
+                                            </div>
+                                            <div class="bar-track">
+                                                <div class="bar-fill" style="width: {{ item.percentage }}%;"></div>
+                                            </div>
+                                            <small>{{ item.percentage }}% of the visible total</small>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                <div class="empty-state compact">
+                                    <h3>No data yet</h3>
+                                    <p>Add some expenses to unlock the chart and the category summary.</p>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel list-panel">
+                    <div class="section-header">
+                        <div>
+                            <h2>Expense List</h2>
+                            <p>
+                                {% if has_filters %}
+                                    {{ stats.visible_count }} matching item{{ "" if stats.visible_count == 1 else "s" }}
+                                {% else %}
+                                    {{ stats.overall_count }} saved item{{ "" if stats.overall_count == 1 else "s" }}
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+
+                    {% if expenses %}
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Amount</th>
+                                        <th>Category</th>
+                                        <th>Note</th>
+                                        <th>Date</th>
+                                        <th>Added</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for expense in expenses %}
+                                        <tr>
+                                            <td class="amount-cell" data-label="Amount">{{ expense.amount | currency }}</td>
+                                            <td data-label="Category">
+                                                <span class="badge">{{ expense.category }}</span>
+                                            </td>
+                                            <td data-label="Note">
+                                                {% if expense.note %}
+                                                    {{ expense.note }}
+                                                {% else %}
+                                                    <span class="muted-text">No note</span>
+                                                {% endif %}
+                                            </td>
+                                            <td data-label="Date">{{ expense.expense_date }}</td>
+                                            <td data-label="Added">{{ expense.created_at | pretty_datetime }}</td>
+                                            <td data-label="Action">
+                                                <form action="{{ url_for('delete_expense', expense_id=expense.id) }}" method="POST">
+                                                    <input type="hidden" name="next_url" value="{{ current_url }}">
+                                                    <button type="submit" class="btn-delete">Delete</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="empty-state">
+                            {% if has_filters %}
+                                <h3>No matching expenses</h3>
+                                <p>Try clearing your filters or widening your search to see more results.</p>
+                            {% else %}
+                                <h3>No expenses yet</h3>
+                                <p>Add your first expense to light up the dashboard and see the chart appear.</p>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                </section>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const categoryInput = document.getElementById("category");
+        const quickChips = document.querySelectorAll(".quick-chip");
+
+        quickChips.forEach((chip) => {
+            chip.addEventListener("click", () => {
+                categoryInput.value = chip.dataset.category;
+                categoryInput.focus();
+            });
+        });
+
+        const categoryTotals = {{ category_totals | tojson }};
+        const labels = Object.keys(categoryTotals);
+        const values = Object.values(categoryTotals);
+        const chartElement = document.getElementById("expenseChart");
+
+        function getChartColor(index) {
+            const hue = (index * 47) % 360;
+            return `hsl(${hue} 68% 52%)`;
+        }
+
+        if (labels.length > 0) {
+            new Chart(chartElement, {
+                type: "pie",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: labels.map((_, index) => getChartColor(index)),
+                        borderColor: "#ffffff",
+                        borderWidth: 4,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: "bottom",
+                            labels: {
+                                usePointStyle: true,
+                                padding: 18
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            chartElement.parentElement.innerHTML = "<div class='chart-empty'>Add expenses to generate a category chart.</div>";
+        }
+    </script>
+</body>
+</html>
